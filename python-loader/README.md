@@ -4,7 +4,9 @@
 
 Loads ServiceNow location model with coordinate locations for each facility, all
 levels for each facility and all units for each level and models the hierarchy
-relationship between the units, levels and facilities.
+relationship between the units, levels and facilities. This is compatible with
+the Indoors model at ArcGIS Pro 2.9 and later, however some attributes must be added
+to the Facilities layer as described below.
 
 ## Usage
 
@@ -25,9 +27,7 @@ relationship between the units, levels and facilities.
     
 <!---may need to remove the following two bullets or, at minimum modify them since these fields are no longer created in the Indoors model.--->
 -   The tool populates the address information along with coordinates, if it is
-    available in the data. 
-    
-    To populate address information it must be contained in fields with the following field names:
+    available in the data. The following fields must exist in (or be added to) the Facilities layer:
     NAME, ADDRESS, LOCALITY, PROVINCE, POSTAL_CODE, COUNTRY
     
     The tool will load the parent facility’s address for all
