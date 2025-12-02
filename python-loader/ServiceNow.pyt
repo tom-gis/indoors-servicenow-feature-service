@@ -44,10 +44,12 @@ class ServiceNowLocationLoader(object):
         # AIIM details
 
         # NOTE: Some of these fields do not exist in the default Facilities fc so must be added before running this tool.
-        self.facilities_fields = ["NAME", "ADDRESS", "LOCALITY", "PROVINCE", "POSTAL_CODE", "COUNTRY"]
+        # self.facilities_fields = ["NAME", "ADDRESS", "LOCALITY", "PROVINCE", "POSTAL_CODE", "COUNTRY"]
+        self.facilities_fields = ["NAME"]
+        self.facilities_optional_fields = ["ADDRESS", "LOCALITY", "PROVINCE", "POSTAL_CODE", "COUNTRY"]
 
         # NOTE: The field(s) "FACILITY_NAME" does/do not exist in the default Levels fc so we will have to look up the NAME in Facilities using the FACILITY_ID in the Levels fc.
-        self.levels_fields = ["NAME", "FACILITY_ID"]
+        self.levels_fields = ["NAME", "FACILITY_ID", "LEVEL_ID"]
 
         # NOTE: The field(s) "LEVEL_NAME","FACILITY_NAME" does/do not exist in the default Units fc so we will have to look them up in their respective fc's using LEVEL_ID in Units and using FACILITY_ID in Facilities
         self.units_fields = ["NAME", "LEVEL_ID"]
@@ -75,7 +77,7 @@ class ServiceNowLocationLoader(object):
         # Other params
         self.spatial_reference_id = 4326
         # Cursor sort by field index for facility (this is by order of the shape_fields followed by the facilities_fields)
-        self.fac_sort_index = 3
+        self.fac_sort_index = 2
         # Cursor sort by field index for levels/units (this is by order of the shape_fields followed by the levels_fields and units_fields)
         self.other_sort_index = 3
         self.address_list = []
@@ -100,6 +102,7 @@ class ServiceNowLocationLoader(object):
         self.state = "state"
         self.zip = "zip"
         self.country = "country"
+        self.level_id = "u_level_id" # Custom field required to be added to ServiceNow. This represents Indoors LEVEL_ID.
 
         # Validation Messages
         self.api_error = "Unable to connect to ServiceNow Rest API"
@@ -222,11 +225,18 @@ class ServiceNowLocationLoader(object):
             facilities_parent = ""
             # facilities_parent = "Americas"
 
+            arcpy.AddMessage(f"Facilities and descendent locations will be added into the hierarchy underneath '{facilities_parent}'" + (" (root)" if facilities_parent == "" else ""))
+
             # Generate lookup dictionaries for use in generateJSON
             self.generateLookups(facilities_layer, levels_layer, units_layer)
 
             # Processing Facilities
-            self.generateJSON(facilities_layer, self.shape_fields + self.facilities_fields, servicenow_url, user_id, pwd, keep_duplicate, facilities_parent)
+            add_fields = []
+            for field_name in self.facilities_optional_fields:
+                if self.fieldExists(facilities_layer, field_name):
+                    add_fields.append(field_name)
+
+            self.generateJSON(facilities_layer, self.shape_fields + self.facilities_fields + add_fields, servicenow_url, user_id, pwd, keep_duplicate, facilities_parent)
 
             # Processing Levels
             self.generateJSON(levels_layer, self.shape_fields + self.levels_fields, servicenow_url, user_id, pwd, keep_duplicate, facilities_parent)
@@ -238,7 +248,7 @@ class ServiceNowLocationLoader(object):
             arcpy.AddError(str(ex))
             sys.exit(0)
 
-    # To post (create records) in servicenow
+    # Post (create) records in servicenow
     def postData(self, servicenow_url, user_id, pwd, json_data):
         # arcpy.AddMessage(f"Posting data: {json_data}")
         try:
@@ -259,7 +269,7 @@ class ServiceNowLocationLoader(object):
             arcpy.AddError(str(ex))
             sys.exit(0)
 
-    # To get records from servicenow api
+    # Get records from servicenow
     def getData(self, servicenow_url, user_id, pwd):
         try:
             # Setting Header and get request
@@ -280,7 +290,7 @@ class ServiceNowLocationLoader(object):
             arcpy.AddError(str(ex))
             sys.exit(0)
 
-    # To update location in servicenow. Using PATCH request instead of PUT to avoid passing the entire payload
+    # Update records in servicenow. Using PATCH request instead of PUT to avoid passing the entire payload
     def updateData(self, servicenow_url, user_id, pwd, json_data):
         # arcpy.AddMessage(f"Updating data: {json_data}")
         try:
@@ -324,7 +334,7 @@ class ServiceNowLocationLoader(object):
             node_full_name = ""
             desc_layer = arcpy.Describe(layer)
             arcpy.AddMessage(f"\nProcessing {desc_layer.name}")
-            # arcpy.AddMessage(f"\nFields {(",".join(fields))}")
+            # arcpy.AddMessage(f"\nFields {(','.join(fields))}")
 
             # Constructing Get Request
             # Outfields
@@ -351,6 +361,7 @@ class ServiceNowLocationLoader(object):
                     key=lambda sort_feature: (
                         sort_feature[self.fac_sort_index] if desc_layer.name.lower() == self.facilities_fc.lower() else sort_feature[self.other_sort_index]
                     ),
+                    reverse=False
                 )
 
                 if len(cursor) > 0:
@@ -367,12 +378,24 @@ class ServiceNowLocationLoader(object):
 
                         # Code block for Facilities
                         if desc_layer.name.lower() == self.facilities_fc.lower():
+
+                            field_names = [field_name.upper() for field_name in fields]
+                            # arcpy.AddMessage(f"field_names = {','.join(field_names)}")
+
+                            # Get optional fields indices
+                            street_i = field_names.index("ADDRESS") if "ADDRESS" in field_names else None
+                            city_i = field_names.index("LOCALITY") if "LOCALITY" in field_names else None
+                            state_i = field_names.index("PROVINCE") if "PROVINCE" in field_names else None
+                            zip_code_i = field_names.index("POSTAL_CODE") if "POSTAL_CODE" in field_names else None
+                            country_i = field_names.index("COUNTRY") if "COUNTRY" in field_names else None
+
                             facility_name = feature[2]
-                            street = feature[3]
-                            city = feature[4]
-                            state = feature[5]
-                            zip_code = feature[6]
-                            country = feature[7]
+                            street = feature[street_i] if street_i else ""
+                            city = feature[city_i] if city_i else ""
+                            state = feature[state_i] if state_i else ""
+                            zip_code = feature[zip_code_i] if zip_code_i else ""
+                            country = feature[country_i] if country_i else ""
+
                             address_dict["NAME"] = facility_name
                             address_dict["ADDRESS"] = [street, city, state, zip_code, country]
                             self.address_list.append(address_dict)
@@ -399,14 +422,16 @@ class ServiceNowLocationLoader(object):
                             arcpy.AddMessage(f"--Processing Facility '{node_full_name}'")
                             self.createDict(feature, address_dict["ADDRESS"])
 
+
                         # Code block for Levels
                         elif desc_layer.name.lower() == self.levels_fc.lower():
                             level_name = feature[2]
-                            level_id = feature[3]
+                            facility_id = feature[3]
+                            level_id = feature[4]
 
                             # Update: Since the facility name is unavailable in Levels now, instead of doing this, look this up in Facilities using FACILITY_ID
                             # facility_name = feature[3]
-                            facility_name = self.facility_id_to_name_lookup[level_id]
+                            facility_name = self.facility_id_to_name_lookup[facility_id]
 
                             # arcpy.AddMessage(f"Level Name: {level_name}")
                             # arcpy.AddMessage(f"Facility Name: {facility_name}")
@@ -419,6 +444,7 @@ class ServiceNowLocationLoader(object):
                             full_name = self.delimiter.join(filter(None, hierarchy_list[0 : len(hierarchy_list)]))
 
                             arcpy.AddMessage(f"--Processing Level '{full_name}'")
+                            # arcpy.AddMessage(f"----Level Name: '{level_name}', Level ID: '{level_id}', Facility Name: '{facility_name}'")
 
                             # Get latest ServiceNow location data
                             if not query_data:
@@ -433,7 +459,6 @@ class ServiceNowLocationLoader(object):
                             # Parameters: queryParent(name, parent_name, parent_full_name, full_name, get_data_result, layer)
                             node_full_name = self.queryParent(level_name, parent_name, parent_full_name, full_name, get_data_result, layer)
                             # arcpy.AddMessage(f"Location: {node_full_name}")
-                            # sys.exit(0)
 
                             # Adding Address Information
                             if self.address_list:
@@ -445,6 +470,9 @@ class ServiceNowLocationLoader(object):
                                     self.createDict(feature, address="")
                             else:
                                 self.createDict(feature, address="")
+
+                            # Set the LEVEL_ID for this Level
+                            self.data[self.level_id] = level_id
 
                         # Code Block for Units
                         elif desc_layer.name.lower() == self.units_fc.lower():
@@ -511,9 +539,15 @@ class ServiceNowLocationLoader(object):
                             else:
                                 self.createDict(feature, address="")
 
+                            # Set the LEVEL_ID for this Unit
+                            self.data[self.level_id] = level_id
+
                         json_data = json.dumps(self.data)
-                        # arcpy.AddMessage(json_data)
-                        # sys.exit(0)
+
+                        # If this is the Levels or Units layer, print out the pending JSON data (for debugging purposes only)
+                        if desc_layer.name.lower() == self.levels_fc.lower() or desc_layer.name.lower() == self.units_fc.lower():
+                            pass
+                            # arcpy.AddMessage(json_data)
 
                         if keep_duplicate is False:
 
@@ -599,7 +633,7 @@ class ServiceNowLocationLoader(object):
         except Exception as ex:
             arcpy.AddError(str(ex))
 
-    # To validate if a field exists in the supplied layer or feature class
+    # To validate if all the fields in a list exist in the supplied layer or feature class
     def fieldsExist(self, layer, field_list, parameter):
         try:
             if field_list is not None:
@@ -610,5 +644,14 @@ class ServiceNowLocationLoader(object):
                         parameter.setErrorMessage(f"{field_name} field not found in {arcpy.Describe(layer).name}.")
                         return False
             return True
+        except Exception as ex:
+            arcpy.AddError(str(ex))
+
+    # To validate if a field exists in the supplied layer or feature class. This is a helper to help identify if optionally-supplied fields exist.
+    def fieldExists(self, layer, field_name):
+        try:
+            fields = arcpy.ListFields(layer)
+            field_names = [field.name.lower() for field in fields]
+            return field_name.lower() in field_names
         except Exception as ex:
             arcpy.AddError(str(ex))
